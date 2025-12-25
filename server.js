@@ -4,94 +4,76 @@ const path = require('path');
 const fs = require('fs');
 const app = express();
 
-const streamDir = path.join(__dirname, 'hls');
-if (!fs.existsSync(streamDir)) fs.mkdirSync(streamDir);
+const hlsFolder = path.join(__dirname, 'hls');
+if (!fs.existsSync(hlsFolder)) fs.mkdirSync(hlsFolder);
 
 const MASTER_STREAM_URL = "https://next.badinan.xyz/nexttv/LDSPORTHD/playlist.m3u8";
 let ffmpegProcess = null;
 
-// وظيفة بدء البث
-const startStreaming = () => {
+// وظيفة تشغيل المحرك - إعدادات البث المباشر الاحترافي
+function startEngine() {
     if (ffmpegProcess) return;
+    
     ffmpegProcess = spawn('ffmpeg', [
-        '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '2',
+        '-reconnect', '1', 
+        '-reconnect_streamed', '1', 
+        '-reconnect_delay_max', '5',
+        '-headers', 'User-Agent: Mozilla/5.0\r\n',
         '-i', MASTER_STREAM_URL,
-        '-c', 'copy', 
+        
+        // --- إعدادات الضغط والنقل السريع (بدون تغيير الجودة) ---
+        '-c', 'copy',                 // نسخ الفيديو والصوت كما هما (بدون خسارة دقة)
         '-f', 'hls',
-        '-hls_time', '1', // قطع مدتها ثانية واحدة للتحميل السريع
-        '-hls_list_size', '3',
-        '-hls_flags', 'delete_segments+independent_segments',
+        '-hls_time', '1',             // تقطيع الفيديو لثانية واحدة (سرعة انطلاق خرافية)
+        '-hls_list_size', '6',        // الحفاظ على تدفق مستمر ومنع التقطيع
+        '-hls_flags', 'delete_segments+independent_segments+discont_start',
         '-hls_segment_type', 'mpegts',
-        path.join(streamDir, 'index.m3u8')
+        '-hls_allow_cache', '1',      // السماح بالتخزين المؤقت الذكي
+        
+        // تحسين الـ Packets لتناسب النت الضعيف (مثل فيسبوك)
+        '-fflags', 'nobuffer+genpts+flush_packets',
+        '-flush_packets', '1',
+        
+        '-hls_segment_filename', path.join(hlsFolder, 'chunk%d.ts'),
+        path.join(hlsFolder, 'index.m3u8')
     ]);
-    console.log("محرك البث انطلق...");
-};
 
-// الصفحة الرئيسية (المشغل)
-app.get('/', (req, res) => {
-    res.send(`
-    <!DOCTYPE html>
-    <html lang="ar" dir="rtl">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Goal-X Ultra Stream</title>
-        <link href="https://vjs.zencdn.net/7.20.3/video-js.css" rel="stylesheet" />
-        <style>
-            body { background: #0f0f0f; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 20px; }
-            .container { max-width: 800px; margin: auto; }
-            .video-js { width: 100%; border-radius: 10px; overflow: hidden; box-shadow: 0 0 20px rgba(0,255,0,0.2); }
-            .controls { margin-top: 20px; display: flex; gap: 10px; justify-content: center; }
-            button { padding: 12px 25px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.3s; }
-            .btn-start { background: #27ae60; color: white; }
-            .btn-stop { background: #c0392b; color: white; }
-            button:hover { opacity: 0.8; transform: scale(1.05); }
-            .status { margin-bottom: 10px; color: #aaa; font-size: 0.9em; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h2>🚀 Goal-X Ultra Stream (4K/1080p)</h2>
-            <p class="status">وضع التحميل السريع (Low Latency) مفعل</p>
-            
-            <video id="my-video" class="video-js vjs-default-skin vjs-big-play-centered" controls preload="auto" data-setup='{}'>
-                <source src="/hls/index.m3u8" type="application/x-mpegURL">
-            </video>
+    console.log("محرك القوة القصوى انطلق...");
+}
 
-            <div class="controls">
-                <button class="btn-start" onclick="location.href='/start'">تشغيل المحرك</button>
-                <button class="btn-stop" onclick="location.href='/stop'">إيقاف السيرفر</button>
-            </div>
-            <p style="margin-top:20px; color:#555;">رابط البث المباشر للمشغلات الخارجية:<br> <code>https://\${req.get('host')}/hls/index.m3u8</code></p>
-        </div>
-
-        <script src="https://vjs.zencdn.net/7.20.3/video.min.js"></script>
-    </body>
-    </html>
-    `);
-});
-
-// أوامر التحكم
-app.get('/start', (req, res) => {
-    startStreaming();
-    res.redirect('/');
-});
-
-app.get('/stop', (req, res) => {
+function stopEngine() {
     if (ffmpegProcess) {
         ffmpegProcess.kill('SIGKILL');
         ffmpegProcess = null;
-        // تنظيف الملفات القديمة
-        const files = fs.readdirSync(streamDir);
-        for (const file of files) fs.unlinkSync(path.join(streamDir, file));
+        const files = fs.readdirSync(hlsFolder);
+        for (const file of files) fs.unlinkSync(path.join(hlsFolder, file));
+        console.log("توقف المحرك.");
     }
-    res.redirect('/');
+}
+
+// واجهة التحكم البسيطة
+app.get('/', (req, res) => {
+    res.send(`
+    <body style="background:#0a0a0a; color:#00ff00; text-align:center; padding-top:50px; font-family:monospace;">
+        <h1 style="color:white;">🚀 GOAL-X ULTIMATE ENGINE</h1>
+        <p style="color:#888;">وضع الضغط السريع (Facebook Style) مفعل</p>
+        <div style="margin:30px;">
+            <button onclick="location.href='/start'" style="padding:20px 40px; background:#222; color:#00ff00; border:2px solid #00ff00; cursor:pointer; font-weight:bold; text-transform:uppercase;">Start Stream</button>
+            <button onclick="location.href='/stop'" style="padding:20px 40px; background:#222; color:#ff0000; border:2px solid #ff0000; cursor:pointer; font-weight:bold; text-transform:uppercase; margin-left:15px;">Stop Stream</button>
+        </div>
+        <p>رابط المشاهدة (m3u8):</p>
+        <input readonly value="https://${req.get('host')}/hls/index.m3u8" style="width:80%; background:#111; color:#00ff00; border:1px solid #333; padding:10px; text-align:center;">
+    </body>
+    `);
 });
 
-app.use('/hls', express.static(streamDir));
+app.get('/start', (req, res) => { startEngine(); res.redirect('/'); });
+app.get('/stop', (req, res) => { stopEngine(); res.redirect('/'); });
+
+app.use('/hls', express.static(hlsFolder));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log('Server is running...');
-    startStreaming(); // يبدأ تلقائياً عند التشغيل
+    console.log('Ready');
+    startEngine(); // تشغيل تلقائي
 });
