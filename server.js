@@ -1,32 +1,25 @@
 const express = require('express');
-const axios = require('axios');
+const { spawn } = require('child_process');
 const crypto = require('crypto');
 const compression = require('compression');
 const app = express();
 
-// إعدادات التشفير الثابتة
-const SECRET_KEY = "GoalX_Ultra_Fast_2025_Safe"; 
+const SECRET_KEY = "GoalX_Fixed_Key_2025_Ultra"; 
 const ALGORITHM = 'aes-256-cbc';
 
-// 1. تفعيل أقوى مستويات الضغط (Gzip/Brotli) لتقليل حجم البيانات المنقولة
-app.use(compression({ level: 9 })); // المستوى 9 هو الأقوى للضغط
+// تفعيل الضغط لتقليل حجم البيانات (Headers & Playlists)
+app.use(compression());
 
-// وظيفة التشفير
+// وظائف التشفير وفك التشفير
 function encrypt(url) {
     const key = crypto.createHash('sha256').update(SECRET_KEY).digest();
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-    let encrypted = cipher.update(JSON.stringify({url: url, ts: Date.now()}), 'utf8', 'base64');
+    let encrypted = cipher.update(JSON.stringify({url: url}), 'utf8', 'base64');
     encrypted += cipher.final('base64');
-    const payload = {
-        iv: iv.toString('base64'),
-        value: encrypted,
-        mac: crypto.createHmac('sha256', key).update(iv.toString('base64') + encrypted).digest('hex')
-    };
-    return Buffer.from(JSON.stringify(payload)).toString('base64');
+    return Buffer.from(JSON.stringify({iv: iv.toString('base64'), value: encrypted})).toString('base64');
 }
 
-// وظيفة فك التشفير
 function decrypt(token) {
     try {
         const key = crypto.createHash('sha256').update(SECRET_KEY).digest();
@@ -39,50 +32,50 @@ function decrypt(token) {
     } catch (e) { return null; }
 }
 
-// الرابط الأول: لتوليد الرابط المشفر (استخدمه من المتصفح)
+// رابط توليد الروابط (استخدمه من المتصفح)
 app.get('/gen', (req, res) => {
-    const urlToEncrypt = req.query.url;
-    if (!urlToEncrypt) return res.send("أدخل الرابط هكذا: /gen?url=رابط_البث");
-    const encrypted = encrypt(urlToEncrypt);
-    const finalLink = `https://${req.get('host')}/live?data=${encrypted}`;
-    res.send(`رابط المشاهدة المضغوط والمشفر:<br><br><input style='width:80%' value='${finalLink}'>`);
+    const url = req.query.url;
+    if (!url) return res.send("أضف الرابط: /gen?url=رابط_البث");
+    const encrypted = encrypt(url);
+    const finalLink = `https://${req.get('host')}/live?data=${encodeURIComponent(encrypted)}`;
+    res.send(`<h3>رابط المشاهدة المعتمد على FFmpeg:</h3><textarea style='width:90%;height:70px;'>${finalLink}</textarea>`);
 });
 
-// الرابط الثاني: البث الفعلي (أقصى ضغط وتمرير سريع)
-app.get('/live', async (req, res) => {
+// رابط البث باستخدام محرك FFmpeg
+app.get('/live', (req, res) => {
     const streamUrl = decrypt(req.query.data);
     if (!streamUrl) return res.status(403).send('Forbidden');
 
-    try {
-        const response = await axios({
-            method: 'get',
-            url: streamUrl,
-            responseType: 'stream',
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept-Encoding': 'gzip, deflate, br', // طلب ضغط من المصدر أيضاً
-                'Connection': 'keep-alive'
-            },
-            timeout: 15000 
-        });
+    // إعدادات البث للنت الضعيف
+    res.setHeader('Content-Type', 'video/mp2t');
+    res.setHeader('Access-Control-Allow-Origin', '*');
 
-        // إرسال Headers لتقليل الـ Buffering في المشغل
-        res.set({
-            'Content-Type': response.headers['content-type'],
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'X-Accel-Buffering': 'no' // يخبر Render بعدم تخزين البيانات مؤقتاً وتمريرها فوراً
-        });
+    // تشغيل FFmpeg كممرر ذكي
+    // يقوم بمعالجة حزم الفيديو لضمان عدم التقطيع
+    const ffmpeg = spawn('ffmpeg', [
+        '-re',                       // القراءة بالسرعة الحقيقية للبث
+        '-i', streamUrl,             // المصدر
+        '-c', 'copy',                // نسخ البيانات بدون استهلاك CPU عالي (أسرع للـ Render)
+        '-map', '0',                 // جلب كل المسارات (صوت وصورة)
+        '-f', 'mpegts',              // تحويل لصيغة خفيفة جداً للنت الضعيف
+        '-metadata', 'service_provider=GoalX',
+        '-fflags', 'nobuffer+genpts', // منع التخزين المؤقت وتصحيح التوقيت
+        'pipe:1'                     // إخراج النتيجة فوراً للمشغل
+    ]);
 
-        // تمرير البيانات لحظياً (Direct Piping)
-        response.data.pipe(res);
+    ffmpeg.stdout.pipe(res);
 
-    } catch (e) {
-        res.status(500).send('Stream Error');
-    }
+    // إيقاف FFmpeg عند إغلاق المشغل لتوفير موارد السيرفر
+    req.on('close', () => {
+        ffmpeg.kill('SIGINT');
+    });
+
+    ffmpeg.on('error', (err) => {
+        console.error('FFmpeg Error:', err);
+    });
 });
 
-app.get('/', (req, res) => res.send("Goal-X Server Active"));
+app.get('/', (req, res) => res.send("FFmpeg Streamer Active"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log('Ready'));
+app.listen(PORT, () => console.log('Server Ready on port ' + PORT));
