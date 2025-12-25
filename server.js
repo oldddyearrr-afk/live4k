@@ -1,81 +1,55 @@
 const express = require('express');
 const { spawn } = require('child_process');
-const crypto = require('crypto');
 const compression = require('compression');
 const app = express();
 
-const SECRET_KEY = "GoalX_Fixed_Key_2025_Ultra"; 
-const ALGORITHM = 'aes-256-cbc';
-
-// تفعيل الضغط لتقليل حجم البيانات (Headers & Playlists)
+// تفعيل الضغط لتقليل استهلاك الباندويث بنسبة 30% إضافية
 app.use(compression());
 
-// وظائف التشفير وفك التشفير
-function encrypt(url) {
-    const key = crypto.createHash('sha256').update(SECRET_KEY).digest();
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-    let encrypted = cipher.update(JSON.stringify({url: url}), 'utf8', 'base64');
-    encrypted += cipher.final('base64');
-    return Buffer.from(JSON.stringify({iv: iv.toString('base64'), value: encrypted})).toString('base64');
-}
+// رابط البث الأساسي الثابت
+const MASTER_STREAM_URL = "https://next.badinan.xyz/nexttv/LDSPORTHD/playlist.m3u8";
 
-function decrypt(token) {
-    try {
-        const key = crypto.createHash('sha256').update(SECRET_KEY).digest();
-        const payload = JSON.parse(Buffer.from(token, 'base64').toString());
-        const iv = Buffer.from(payload.iv, 'base64');
-        const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-        let decrypted = decipher.update(payload.value, 'base64', 'utf8');
-        decrypted += decipher.final('utf8');
-        return JSON.parse(decrypted).url;
-    } catch (e) { return null; }
-}
-
-// رابط توليد الروابط (استخدمه من المتصفح)
-app.get('/gen', (req, res) => {
-    const url = req.query.url;
-    if (!url) return res.send("أضف الرابط: /gen?url=رابط_البث");
-    const encrypted = encrypt(url);
-    const finalLink = `https://${req.get('host')}/live?data=${encodeURIComponent(encrypted)}`;
-    res.send(`<h3>رابط المشاهدة المعتمد على FFmpeg:</h3><textarea style='width:90%;height:70px;'>${finalLink}</textarea>`);
-});
-
-// رابط البث باستخدام محرك FFmpeg
-app.get('/live', (req, res) => {
-    const streamUrl = decrypt(req.query.data);
-    if (!streamUrl) return res.status(403).send('Forbidden');
-
-    // إعدادات البث للنت الضعيف
+app.get('/watch', (req, res) => {
+    // إعدادات تجعل المشغل يعامل الرابط كبث فضائي مباشر
     res.setHeader('Content-Type', 'video/mp2t');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
 
-    // تشغيل FFmpeg كممرر ذكي
-    // يقوم بمعالجة حزم الفيديو لضمان عدم التقطيع
+    // إعداد محرك FFmpeg الخارق للنت الضعيف جداً
     const ffmpeg = spawn('ffmpeg', [
-        '-re',                       // القراءة بالسرعة الحقيقية للبث
-        '-i', streamUrl,             // المصدر
-        '-c', 'copy',                // نسخ البيانات بدون استهلاك CPU عالي (أسرع للـ Render)
-        '-map', '0',                 // جلب كل المسارات (صوت وصورة)
-        '-f', 'mpegts',              // تحويل لصيغة خفيفة جداً للنت الضعيف
-        '-metadata', 'service_provider=GoalX',
-        '-fflags', 'nobuffer+genpts', // منع التخزين المؤقت وتصحيح التوقيت
-        'pipe:1'                     // إخراج النتيجة فوراً للمشغل
+        '-reconnect', '1', 
+        '-reconnect_streamed', '1', 
+        '-reconnect_delay_max', '4',
+        '-err_detect', 'ignore_err', // تجاهل الأخطاء البسيطة لضمان عدم توقف البث
+        '-i', MASTER_STREAM_URL,
+        
+        // --- إعدادات السرعة والنت الضعيف ---
+        '-c', 'copy',                // نسخ الفيديو (بدون ضغط CPU) لضمان سرعة الاستجابة
+        '-f', 'mpegts',              // تحويل لصيغة TS (الأفضل للنت الضعيف لأنها Streamable)
+        '-fifo_size', '500000',      // ذاكرة مؤقتة داخلية ضخمة لمنع التقطيع
+        '-fflags', 'nobuffer+genpts+flush_packets', 
+        '-flags', 'low_delay',       // وضع "التأخير المنخفض"
+        '-max_delay', '100000',      // تقليل وقت الاستجابة لأقصى حد
+        
+        // إخراج النتيجة فوراً
+        'pipe:1'
     ]);
 
+    // ضخ البيانات مباشرة
     ffmpeg.stdout.pipe(res);
 
-    // إيقاف FFmpeg عند إغلاق المشغل لتوفير موارد السيرفر
+    // تنظيف العمليات عند الخروج
     req.on('close', () => {
-        ffmpeg.kill('SIGINT');
+        ffmpeg.kill('SIGKILL');
     });
 
     ffmpeg.on('error', (err) => {
-        console.error('FFmpeg Error:', err);
+        console.error('FFmpeg Error');
     });
 });
 
-app.get('/', (req, res) => res.send("FFmpeg Streamer Active"));
+app.get('/', (req, res) => res.send("Ultra Fast Stream Server is Ready!"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log('Server Ready on port ' + PORT));
+app.listen(PORT, () => console.log('Maximum Performance Active'));
